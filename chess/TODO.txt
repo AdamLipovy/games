@@ -1,0 +1,7 @@
+create functions:
+    - check check
+    - if the selected figure can protect king
+    - if king can move to square without beeing in check
+    - castle
+    - en passant
+    - check mate
