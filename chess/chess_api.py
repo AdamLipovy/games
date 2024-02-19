@@ -106,21 +106,18 @@ class Tile():
         self.tile_state: TileState = TileState.Normal
         self.position: str = position
 
-        self.trigger_commands: dict[TileState, list] = {state: [] for state in TileState}
+        # if true can be en passant or can castle
+        self.special_tile: bool = False
 
     def optional_positions(self) -> Places:
         if self.figure is None:
             return Places()
         
         return self.figure.movement_options()
-    
-    def update(self) -> None:
-        print("updating")
-        for func in self.trigger_commands[self.tile_state]:
-            func()
 
     def move(self, from_tile: 'Tile') -> None:
         self.figure = from_tile.figure
+        self.figure.moved_from_start = True
         from_tile.figure = None
 
 class Board():
@@ -135,6 +132,9 @@ class Board():
         self.selected_tile: Tile | None = None
         self.attacked_tiles: set[Tile] | None = None
         self.can_move_tiles: set[Tile] | None = None
+
+        self.en_passant_tile: Tile | None = None
+        self.en_passant_fig: Figure | None = None
 
         self.turn: Color = Color.White
 
@@ -303,19 +303,35 @@ class Board():
             if movement_data.attacks_limit is None:
                 for i in range(1, 9):
                     checking_tile = o_x + movement_x * i, o_y + movement_y * i
-
-                    if not self.in_bounds(checking_tile) or not self.can_attack(checking_tile, attacker_figure.color, attacker_figure.type == Figure_type.King):
+                    if not self.in_bounds(checking_tile):
                         break
-                    aux_attacks.add(convert_to_chess_notation(checking_tile))
+                    
+                    if self.board[convert_to_chess_notation(checking_tile)].figure is None:
+                        continue
 
-                break
+                    if self.board[convert_to_chess_notation(checking_tile)].figure.color != attacker_figure.color:
+                        aux_attacks.add(convert_to_chess_notation(checking_tile))
+                    break
+                    
+
+                continue
 
             for i in range(1, movement_data.attacks_limit + 1):
-                checking_tile = o_x + movement_x * i, o_y + movement_y * i
+                    checking_tile = o_x + movement_x * i, o_y + movement_y * i
+                    if not self.in_bounds(checking_tile):
+                        break
+                    
+                    attacking_tile = self.board[convert_to_chess_notation(checking_tile)]
 
-                if not self.in_bounds(checking_tile) or not self.can_attack(checking_tile, attacker_figure.color, attacker_figure.type == Figure_type.King):
+                    if attacking_tile.figure is None and self.en_passant_tile != attacking_tile:
+                        continue
+
+                    # holy shit
+                    if attacking_tile.figure.color != attacker_figure.color or\
+                            (self.en_passant_fig is not None and self.en_passant_tile is not None and\
+                            attacker_figure.type == Figure_type.Pawn and attacker_figure.color != self.en_passant_fig.color) :
+                        aux_attacks.add(convert_to_chess_notation(checking_tile))
                     break
-                aux_attacks.add(convert_to_chess_notation(checking_tile))
 
         return aux_movement, aux_attacks
 
@@ -336,61 +352,63 @@ class Board():
         return self.board[tile].figure != None
     
     # whether or not can figure be moved without exposing king to enemy
-    def can_attack(self, tile: Notation, attackers_color: Color, protected: bool) -> bool:
+    def can_attack(self, tile: Notation, attackers_color: Color) -> bool:
 
         if isinstance(tile, tuple):
             tile = convert_to_chess_notation(tile)
         
         fig = self.board[tile].figure
 
-        return fig != None and fig.color != attackers_color and ((not protected) or self.is_protected(tile, attackers_color))
+        # this makes 0 sense idk what i was doing TODO
+        return fig != None and fig.color != attackers_color and self.is_protected(tile, attackers_color)
     
         # TODO -- en passaunt
 
+    def en_passant(self):
+        pass
+
+
+    # if by moving the figure, same color king doesn't get checked (if current figure is pinned or not)
     def is_protected(self, tile: str, color: Color) -> bool:
-        print("generated variations for king protected cases")
 
         new_board = Board()
+        # copies current board and removes the figure
         new_board.setup_board({position: (tile.figure.type, tile.figure.color) for position, tile in self.board.items() if tile.figure != None})
-
-        if color == Color.White:
-            new_board.board[tile].figure = new_board.white_king_tile.figure
-            new_board.white_king_tile = new_board.board[tile]
-
-        else:
-            new_board.board[tile].figure = new_board.black_king_tile.figure
-            new_board.black_king_tile = new_board.board[tile]
-
+        new_board.board[tile].figure = None
+        print(new_board.check_check(color))
         return not new_board.check_check(color)
 
     def check_check(self, color: Color) -> bool:
         print("check check")
-        for king_tile in [self.black_king_tile, self.white_king_tile]:
-            o_x, o_y = convert_to_computer_notation(king_tile.position)
-            for type in Figure_type:
-                temp_fig = Figure(type, color)
-                movement_data = temp_fig.movement_options()
-                for movement_x, movement_y in movement_data.attacks:
+        king_tile = self.black_king_tile
+        if color == Color.White:
+            king_tile = self.white_king_tile
 
-                    if color == Color.Black:
-                        movement_x, movement_y = movement_x * -1, movement_y * -1
+        o_x, o_y = convert_to_computer_notation(king_tile.position)
+        for type in Figure_type:
+            temp_fig = Figure(type, color)
+            movement_data = temp_fig.movement_options()
+            for movement_x, movement_y in movement_data.attacks:
 
-                    if movement_data.attacks_limit is None:
-                        for i in range(1, 9):
-                            checking_tile = o_x + movement_x * i, o_y + movement_y * i
+                if color == Color.Black:
+                    movement_x, movement_y = movement_x * -1, movement_y * -1
 
-                            if not self.in_bounds(checking_tile) or not self.can_attack(checking_tile, color, False):
-                                break
-                            return True
-
-                        break
-
-                    for i in range(1, movement_data.attacks_limit + 1):
+                if movement_data.attacks_limit is None:
+                    for i in range(1, 9):
                         checking_tile = o_x + movement_x * i, o_y + movement_y * i
 
-                        if not self.in_bounds(checking_tile) or not self.can_attack(checking_tile, color, False):
+                        if not self.in_bounds(checking_tile) or not self.can_attack(checking_tile, color):
                             break
                         return True
+
+                    break
+
+                for i in range(1, movement_data.attacks_limit + 1):
+                    checking_tile = o_x + movement_x * i, o_y + movement_y * i
+
+                    if not self.in_bounds(checking_tile) or not self.can_attack(checking_tile, color):
+                        break
+                    return True
         return False
             
 #   DEBUGGING
@@ -401,12 +419,13 @@ class Board():
             line2 = "       - "
             for letter in ROWS_TITLES:
                 fig = self.board[letter + str(i)].figure
-                line2 += "  {}    ".format(self.board[letter + str(i)].tile_state.value)
                 if fig is None:
                     line += "None   "
                     continue
 
                 line += "{}   ".format(fig.type.name)
+                line2 += "{}   ".format(fig.moved_from_start)
+
 
             print(line)
             print(line2)
